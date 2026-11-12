@@ -15,8 +15,20 @@
     .type   op1_asm, @function
     .align  2
 op1_asm:
-    sw      zero, 0(a2)
-    li      a0, 0
+    # t0 = carry, t1 = n
+    add t1, x0, x0
+    beq a1, x0, while_b_end
+
+while_b:
+    and t0, a0, a1
+    slli t0, t0, 1
+    xor a0, a0, a1
+    add a1, x0, t0
+    addi t1, t1, 1
+    bne a1, x0, while_b
+
+while_b_end:
+    sw t1, 0(a2)
     ret
     .size   op1_asm, .-op1_asm
 
@@ -24,72 +36,85 @@ op1_asm:
     .type   op2_asm, @function
     .align  2
 op2_asm:
-    li      a0, 0
+    # The contract requires a straight-line subtraction.
+    sub a0, a0, a1
     ret
     .size   op2_asm, .-op2_asm
-
-
 
     .globl  op3_asm
     .type   op3_asm, @function
     .align  2
 op3_asm:
-    li      a0, 0
-    ret
-    .size   op3_asm, .-op3_asm
-
-    srli t0, a0, -1
-    srli t1, a1, -1
+    # t0 = half sums, t1 = shared low bit
+    srli t0, a0, 1
+    srli t1, a1, 1
     add t0, t0, t1
     and t1, a0, a1
     andi t1, t1, 1
     add a0, t0, t1
     ret
+    .size   op3_asm, .-op3_asm
 
     .globl  q_mul_asm
     .type   q_mul_asm, @function
     .align  2
 q_mul_asm:
-    li      a0, 0
-    ret
-    .size   q_mul_asm, .-q_mul_asm
-
-    blt a0, 0, multiplicand_smaller
+    # t4:t0 = multiplicand, t1 = multiplier, t5:t2 = product
+    # t3 and t6 = temporary values; a0 and a1 retain the original signs.
+    blt a0, x0, multiplicand_smaller
     add t0, x0, a0
     j multiplier
 
 multiplicand_smaller:
     sub t0, x0, a0
 
-    blt a1, 0, multiplier_smaller
+multiplier:
+    blt a1, x0, multiplier_smaller
     add t1, x0, a1
     j product
 
 multiplier_smaller:
     sub t1, x0, a1
-    
+
 product:
     add t2, x0, x0
+    add t4, x0, x0
+    add t5, x0, x0
+    beq t1, x0, while_multiplier_end
 
 while_multiplier:
-    beq t1, x0, while_multiplier_end
-    andi t3, a1, 1
+    andi t3, t1, 1
     beq t3, x0, not_if
-    add t2, t2, a0
+    # Add both halves and carry the low-word overflow into the high word.
+    add t2, t2, t0
+    sltu t6, t2, t0
+    add t5, t5, t4
+    add t5, t5, t6
 not_if:
-    slli a0, a0, 1
-    srai a1, a1, 1
-    j while_multiplier
+    srli t3, t0, 31
+    slli t0, t0, 1
+    slli t4, t4, 1
+    or t4, t4, t3
+    srli t1, t1, 1
+    bne t1, x0, while_multiplier
 
 while_multiplier_end:
-    slt t3, t0, x0
-    slt t4, t1, x0
-    beq t3, t4, not_if_two
+    xor t3, a0, a1
+    bge t3, x0, not_if_two
+    # Negate the 64-bit product, including the borrow from the low word.
+    sltu t6, x0, t2
     sub t2, x0, t2
+    sub t5, x0, t5
+    sub t5, t5, t6
 
 not_if_two:
-    addi t3, x0, 1
-    slli t3, t3, 19
+    lui t3, 0x80
     add t2, t2, t3
-    srai a0, t2, 20
+    sltu t6, t2, t3
+    add t5, t5, t6
+    # Keep bits 20 through 51 of the rounded product.
+    srli t2, t2, 20
+    slli t5, t5, 12
+    or a0, t2, t5
     ret
+    .size   q_mul_asm, .-q_mul_asm
